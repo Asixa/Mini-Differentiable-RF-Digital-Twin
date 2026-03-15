@@ -1,7 +1,10 @@
 # Physically Accurate Differentiable Inverse Rendering for Radio Frequency Digital Twin
 
-> [!NOTE]
-> This project is part of the [**WiTwin.AI**](https://witwin.ai) initiative.
+<p align="center">
+  <a href="https://witwin.ai">
+    <img src="https://img.shields.io/badge/Part%20of-WiTwin.AI-blue?style=for-the-badge" alt="Part of WiTwin.AI"/>
+  </a>
+</p>
 
 > [!WARNING]
 > This is a **conceptual demo** with minimal implementation. The full simulator is coming soon on [**WiTwin.AI**](https://witwin.ai).
