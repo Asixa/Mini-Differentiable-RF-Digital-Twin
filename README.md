@@ -8,6 +8,7 @@
 
 > [!IMPORTANT]
 > RFDT uses [**RayD**](https://github.com/Asixa/RayD), our self-developed differentiable ray-tracing core, as its ray-tracing backend.
+> If you are looking for the Mitsuba version, please see the [**`codex/mitsuba` branch**](https://github.com/Asixa/Mini-Differentiable-RF-Digital-Twin/tree/codex/mitsuba).
 
 > [!NOTE]
 > This is a **conceptual demo** with minimal implementation. The full simulator is coming soon on [**WiTwin.AI**](https://witwin.ai).
