@@ -1,7 +1,8 @@
 """Ray direction generation for GPU-accelerated ray tracing."""
 
 import drjit as dr
-import mitsuba as mi
+
+from .rt_backend import Float, Vector3f
 
 # Golden ratio for Fibonacci lattice
 _PHI = (1 + 5 ** 0.5) / 2
@@ -16,9 +17,9 @@ def generate_sphere_directions(n_rays: int):
         n_rays: Number of ray directions to generate
 
     Returns:
-        mi.Vector3f: Unit direction vectors
+        Vector3f: Unit direction vectors
     """
-    indices = dr.arange(mi.Float, n_rays)
+    indices = dr.arange(Float, n_rays)
     phi = dr.acos(1 - 2 * (indices + 0.5) / n_rays)
     theta = dr.pi * (1 + _PHI) * indices
 
@@ -27,7 +28,7 @@ def generate_sphere_directions(n_rays: int):
     dy = sin_phi * dr.sin(theta)
     dz = dr.cos(phi)
 
-    return mi.Vector3f(dx, dy, dz)
+    return Vector3f(dx, dy, dz)
 
 
 def generate_circle_directions(n_rays: int):
@@ -39,14 +40,14 @@ def generate_circle_directions(n_rays: int):
         n_rays: Number of ray directions to generate
 
     Returns:
-        mi.Vector3f: Unit direction vectors (z component is always 0)
+        Vector3f: Unit direction vectors (z component is always 0)
     """
     # Create angles from 0 to 2*pi (exclusive of endpoint)
     step = 2 * dr.pi / n_rays
-    theta = dr.arange(mi.Float, n_rays) * step
+    theta = dr.arange(Float, n_rays) * step
 
     dx = dr.cos(theta)
     dy = dr.sin(theta)
-    dz = dr.zeros(mi.Float, n_rays)
+    dz = dr.zeros(Float, n_rays)
 
-    return mi.Vector3f(dx, dy, dz)
+    return Vector3f(dx, dy, dz)

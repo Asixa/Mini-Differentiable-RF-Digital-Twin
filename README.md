@@ -6,7 +6,10 @@
   </a>
 </p>
 
-> [!WARNING]
+> [!IMPORTANT]
+> RFDT uses [**RayD**](https://github.com/Asixa/RayD), our self-developed differentiable ray-tracing core, as its ray-tracing backend.
+
+> [!NOTE]
 > This is a **conceptual demo** with minimal implementation. The full simulator is coming soon on [**WiTwin.AI**](https://witwin.ai).
 
 ### [MobiCom 2026](https://www.sigmobile.org/mobicom/2026/) | [Project Page](https://rfdt.witwin.ai/)
@@ -66,13 +69,20 @@ Digital twins (DTs) are virtual replicas of physical scenes that transform the d
 
 ## Getting Started
 
+### Runtime Backend
+
+This repository uses [**RayD**](https://github.com/Asixa/RayD) as its ray-tracing backend, **not Mitsuba**.
+**RayD** is our self-developed differentiable ray-tracing core, and the current RFDT demo runs on top of **RayD + DrJit**.
+
 ### Installation
 
 ```bash
+conda activate witwin2
 pip install -r requirements.txt
 ```
 
-Requires Python 3.10+ and a CUDA-capable GPU.
+Requires Python 3.10+, a CUDA-capable GPU, and the **RayD + DrJit** runtime.
+The current notebooks and scripts are validated against the `witwin2` conda environment.
 
 ### Notebooks
 

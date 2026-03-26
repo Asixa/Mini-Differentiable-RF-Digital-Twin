@@ -1,5 +1,5 @@
 drjit==1.2.0
 matplotlib==3.10.8
-mitsuba==3.7.1
+rayd==0.1.5
 numpy==2.4.1
 tqdm==4.67.1

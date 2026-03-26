@@ -8,32 +8,54 @@ from typing import Optional, Tuple, List
 
 import matplotlib.pyplot as plt
 import numpy as np
-import mitsuba as mi
 import drjit as dr
+import torch
 from tqdm import tqdm
-from rfdt.constants import DEFAULT_VARIANT
-
-mi.set_variant(DEFAULT_VARIANT)
 
 from rfdt import create_cube_mesh, create_prism_mesh, Tracer
 from rfdt.scene import Scene
 from rfdt.constants import POWER_DB_FLOOR
 from rfdt.utils import scalar
+from rfdt.rt_backend import (
+    Float, Point2f, Point3f,
+    set_log_level_warn, register_sampler_seed,
+)
 
 
 def set_seed(seed: int = 42):
     """Freeze all random number generators for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
-    mi.set_log_level(mi.LogLevel.Warn)
+    set_log_level_warn()
     try:
         dr.seed(seed)
     except (AttributeError, TypeError):
         pass
-    try:
-        mi.register_sampler_seed(seed)
-    except AttributeError:
-        pass
+    register_sampler_seed(seed)
+
+
+def _tensor_to_float(value: torch.Tensor) -> float:
+    return float(value.detach().cpu().item())
+
+
+def _tensor_to_point2f(value: torch.Tensor) -> Point2f:
+    return Point2f(_tensor_to_float(value[0]), _tensor_to_float(value[1]))
+
+
+def _assign_vector_grad(param: torch.nn.Parameter, grad_x, grad_y):
+    param.grad = torch.tensor(
+        [_tensor_to_float(grad_x.torch()), _tensor_to_float(grad_y.torch())],
+        dtype=param.dtype,
+        device=param.device,
+    )
+
+
+def _assign_scalar_grad(param: torch.nn.Parameter, grad_value):
+    param.grad = torch.tensor(
+        _tensor_to_float(grad_value.torch()),
+        dtype=param.dtype,
+        device=param.device,
+    )
 
 
 @dataclass
@@ -122,13 +144,13 @@ class RadioFieldOptimizer:
 
         # Fields computed during preparation
         self.target_field: Optional[np.ndarray] = None
-        self.target_field_db_dr: Optional[mi.Float] = None
+        self.target_field_db_dr: Optional[Float] = None
         self.init_field: Optional[np.ndarray] = None
         self.final_field: Optional[np.ndarray] = None
 
         # Base mesh (created once, transformed during optimization)
-        self._base_vertices: Optional[mi.Point3f] = None  # Vertices at origin with no rotation
-        self._base_faces: Optional[mi.Vector3u] = None    # Topology (unchanged)
+        self._base_vertices: Optional[Point3f] = None  # Vertices at origin with no rotation
+        self._base_faces: Optional[Vector3u] = None    # Topology (unchanged)
         self._base_center_z: float = 0.0                  # Z offset for base mesh
 
         # Tracer instance (created once, updated via update_scene())
@@ -138,7 +160,7 @@ class RadioFieldOptimizer:
         """Create base mesh at origin with no rotation (called once)."""
         cfg = self.config
         # Create mesh centered at (0, 0, center_z) with no rotation
-        base_center = mi.Point3f(0.0, 0.0, float(cfg.init_center[2]))
+        base_center = Point3f(0.0, 0.0, float(cfg.init_center[2]))
         self._base_center_z = float(cfg.init_center[2])
 
         if cfg.geometry_type == "cube":
@@ -166,23 +188,28 @@ class RadioFieldOptimizer:
         Apply transformation to base vertices.
 
         Args:
-            center_xy: mi.Point2f - XY translation (Z is fixed from base mesh)
-            rotation: mi.Float - Rotation angle around Z-axis in radians
+            center_xy: Point2f - XY translation (Z is fixed from base mesh)
+            rotation: Float - Rotation angle around Z-axis in radians
 
         Returns:
-            vertices: mi.Point3f - Transformed vertices (differentiable)
-            faces: mi.Vector3u - Faces (unchanged topology)
+            vertices: Point3f - Transformed vertices (differentiable)
+            faces: Vector3u - Faces (unchanged topology)
         """
-        # Build transformation: first rotate around Z-axis, then translate
-        # Using chain style like Mitsuba tutorial: Transform4f().translate().rotate()
+        # Rotate the base mesh in the XY plane, then translate in XY.
         if rotation is not None:
-            rotation_deg = rotation * (180.0 / np.pi)
-            trafo = mi.Transform4f().translate([center_xy.x, center_xy.y, 0.0]).rotate([0, 0, 1], rotation_deg)
+            cos_r = dr.cos(rotation)
+            sin_r = dr.sin(rotation)
+            rotated_x = self._base_vertices.x * cos_r - self._base_vertices.y * sin_r
+            rotated_y = self._base_vertices.x * sin_r + self._base_vertices.y * cos_r
         else:
-            trafo = mi.Transform4f().translate([center_xy.x, center_xy.y, 0.0])
+            rotated_x = self._base_vertices.x
+            rotated_y = self._base_vertices.y
 
-        # Apply transformation to base vertices
-        transformed_vertices = trafo @ self._base_vertices
+        transformed_vertices = Point3f(
+            rotated_x + center_xy.x,
+            rotated_y + center_xy.y,
+            self._base_vertices.z,
+        )
 
         return transformed_vertices, self._base_faces
 
@@ -204,9 +231,9 @@ class RadioFieldOptimizer:
 
     def _compute_field(self, center, tx, rotation) -> Tuple[dict, np.ndarray]:
         cfg = self.config
-        center_pt = mi.Point3f(float(center[0]), float(center[1]), float(center[2]))
-        tx_pt = mi.Point3f(float(tx[0]), float(tx[1]), float(tx[2]))
-        rot = mi.Float(float(rotation)) if rotation is not None else None
+        center_pt = Point3f(float(center[0]), float(center[1]), float(center[2]))
+        tx_pt = Point3f(float(tx[0]), float(tx[1]), float(tx[2]))
+        rot = Float(float(rotation)) if rotation is not None else None
 
         vertices, faces = self._create_mesh(center_pt, rot)
         scene = Scene(vertices, faces)
@@ -259,7 +286,7 @@ class RadioFieldOptimizer:
         print("[1/2] Computing target field...", end=" ")
         _, self.target_field = self._compute_field(cfg.target_center, cfg.target_tx, cfg.target_rotation)
         target_field_db = 20 * np.log10(self.target_field + POWER_DB_FLOOR)
-        self.target_field_db_dr = mi.Float(target_field_db)
+        self.target_field_db_dr = Float(target_field_db)
         print("done")
 
         print("[2/2] Computing initial field...", end=" ")
@@ -277,32 +304,35 @@ class RadioFieldOptimizer:
     def optimize(self):
         cfg = self.config
 
-        # Create optimizable parameters
-        param_center = mi.Point2f(cfg.init_center[0], cfg.init_center[1])
-        param_cz = mi.Float(cfg.init_center[2])
-        param_tx = mi.Point2f(cfg.init_tx[0], cfg.init_tx[1])
-        param_tx_z = mi.Float(cfg.init_tx[2])
-        param_rotation = mi.Float(cfg.init_rotation)
+        device = torch.device("cpu")
+        center_xy = torch.tensor(cfg.init_center[:2], dtype=torch.float32, device=device)
+        tx_xy = torch.tensor(cfg.init_tx[:2], dtype=torch.float32, device=device)
+        rotation_value = torch.tensor(cfg.init_rotation, dtype=torch.float32, device=device)
 
-        # Enable gradients
         if cfg.optimize_center:
-            dr.enable_grad(param_center)
+            center_xy = torch.nn.Parameter(center_xy)
         if cfg.optimize_tx:
-            dr.enable_grad(param_tx)
+            tx_xy = torch.nn.Parameter(tx_xy)
         if cfg.optimize_rotation:
-            dr.enable_grad(param_rotation)
+            rotation_value = torch.nn.Parameter(rotation_value)
 
-        # Create Adam optimizer
-        opt = mi.ad.Adam(lr=cfg.learning_rate)
+        optim_params = []
         if cfg.optimize_center:
-            opt['center'] = param_center
+            optim_params.append(center_xy)
         if cfg.optimize_tx:
-            opt['tx'] = param_tx
+            optim_params.append(tx_xy)
         if cfg.optimize_rotation:
-            opt['rotation'] = param_rotation
+            optim_params.append(rotation_value)
+
+        if not optim_params:
+            raise ValueError("At least one parameter must be optimizable.")
+
+        optimizer = torch.optim.Adam(optim_params, lr=cfg.learning_rate)
+        param_cz = Float(cfg.init_center[2])
+        param_tx_z = Float(cfg.init_tx[2])
 
         # Optimization loop
-        print("\n[3] Running Adam optimization...")
+        print("\n[3] Running torch Adam optimization...")
         pbar = tqdm(range(cfg.n_iterations), desc="Optimizing", unit="iter")
 
         # Timing accumulators
@@ -318,27 +348,34 @@ class RadioFieldOptimizer:
                     lr = cfg.lr_min + 0.5 * (cfg.learning_rate - cfg.lr_min) * (
                         1 + np.cos(np.pi * i / cfg.n_iterations)
                     )
-                    opt.set_learning_rate(lr)
+                    for group in optimizer.param_groups:
+                        group["lr"] = lr
+
+                optimizer.zero_grad(set_to_none=True)
+
+                param_center = _tensor_to_point2f(center_xy)
+                param_tx = _tensor_to_point2f(tx_xy)
+                param_rotation = Float(_tensor_to_float(rotation_value))
 
                 if cfg.optimize_center:
-                    dr.set_grad(param_center, mi.Point2f(0.0, 0.0))
+                    dr.enable_grad(param_center)
                 if cfg.optimize_tx:
-                    dr.set_grad(param_tx, mi.Point2f(0.0, 0.0))
+                    dr.enable_grad(param_tx)
                 if cfg.optimize_rotation:
-                    dr.set_grad(param_rotation, mi.Float(0.0))
+                    dr.enable_grad(param_rotation)
 
                 # Use detached values when not optimizing to prevent gradient accumulation
                 if cfg.optimize_tx:
-                    tx_pos = mi.Point3f(param_tx.x, param_tx.y, param_tx_z)
+                    tx_pos = Point3f(param_tx.x, param_tx.y, param_tx_z)
                 else:  # Use fixed constant values
-                    tx_pos = mi.Point3f(cfg.init_tx[0], cfg.init_tx[1], cfg.init_tx[2]) 
+                    tx_pos = Point3f(cfg.init_tx[0], cfg.init_tx[1], cfg.init_tx[2]) 
 
                 rotation = param_rotation if cfg.optimize_rotation else None
 
                 if cfg.optimize_center:
                     center_for_transform = param_center
                 else:  # Use fixed constant values - prevents any gradient flow to center
-                    center_for_transform = mi.Point2f(cfg.init_center[0], cfg.init_center[1]) 
+                    center_for_transform = Point2f(cfg.init_center[0], cfg.init_center[1]) 
 
                 # Apply transformation to base mesh (no mesh recreation)
                 vertices, _ = self._apply_transformation(center_for_transform, rotation)
@@ -365,7 +402,7 @@ class RadioFieldOptimizer:
                 # Loss computation
                 t0 = time.perf_counter()
                 a_tot = result['a_tot']
-                field_mag = dr.sqrt(a_tot.real * a_tot.real + a_tot.imag * a_tot.imag + mi.Float(POWER_DB_FLOOR))
+                field_mag = dr.sqrt(a_tot.real * a_tot.real + a_tot.imag * a_tot.imag + Float(POWER_DB_FLOOR))
                 field_db = dr.log(field_mag + POWER_DB_FLOOR) * (20.0 / np.log(10.0))
                 diff = field_db - self.target_field_db_dr
                 loss = dr.mean(diff * diff)
@@ -387,25 +424,25 @@ class RadioFieldOptimizer:
                 # Optimizer step
                 t0 = time.perf_counter()
                 if backward_ok:
-                    opt.step()
                     if cfg.optimize_center:
-                        param_center = opt['center']
+                        _assign_vector_grad(center_xy, dr.grad(param_center.x), dr.grad(param_center.y))
                     if cfg.optimize_tx:
-                        param_tx = opt['tx']
+                        _assign_vector_grad(tx_xy, dr.grad(param_tx.x), dr.grad(param_tx.y))
                     if cfg.optimize_rotation:
-                        param_rotation = opt['rotation']
+                        _assign_scalar_grad(rotation_value, dr.grad(param_rotation))
+                    optimizer.step()
                 timing_accum['opt_step'] += time.perf_counter() - t0
 
                 # Scalar extraction (for logging)
                 t0 = time.perf_counter()
                 loss_val = scalar(loss)
-                cx = scalar(param_center.x)
-                cy = scalar(param_center.y)
+                cx = _tensor_to_float(center_xy[0])
+                cy = _tensor_to_float(center_xy[1])
                 cz = scalar(param_cz)
-                tx_x = scalar(param_tx.x)
-                tx_y = scalar(param_tx.y)
+                tx_x = _tensor_to_float(tx_xy[0])
+                tx_y = _tensor_to_float(tx_xy[1])
                 tx_z = scalar(param_tx_z)
-                rot = scalar(param_rotation)
+                rot = _tensor_to_float(rotation_value)
                 timing_accum['scalar_sync'] += time.perf_counter() - t0
 
                 self.losses.append(loss_val)

@@ -3,7 +3,6 @@
 import math
 import time
 import drjit as dr
-import mitsuba as mi
 
 from .scene import Scene
 from .trace_los import compute_los_field
@@ -11,6 +10,7 @@ from .trace_reflection import compute_reflection_field
 from .trace_diffraction import compute_diffraction_field
 from .utils import scalar
 from .field import Field
+from .rt_backend import Float, Point3f, Complex2f
 
 C = 299792458.0
 
@@ -34,7 +34,7 @@ class Tracer:
 
         Args:
             frequency: Signal frequency in Hz
-            scene: Scene object encapsulating mesh and Mitsuba scene
+            scene: Scene object encapsulating mesh and the RayD scene
             vertices, faces: Optional fallback to build a Scene internally
             reflection_n_rays: Number of rays for reflection tracing (default 10000)
             reflection_max_bounces: Maximum reflection bounces (default 2)
@@ -68,7 +68,7 @@ class Tracer:
         Compute electromagnetic field distribution.
 
         Args:
-            tx_pos: Transmitter position (x, y, z) - tuple, list, or mi.Point3f
+            tx_pos: Transmitter position (x, y, z) - tuple, list, or Point3f
             grid_size: Grid resolution (if None, auto-calculate from resolution_wavelength)
             range_x, range_y: Computation area bounds
             calculation_height: Z coordinate for field computation (default: tx height)
@@ -77,11 +77,11 @@ class Tracer:
 
         Returns:
             Dictionary containing complex field components:
-                - a_los: LoS complex field (mi.Complex2f)
-                - a_ref: Reflection complex field (mi.Complex2f)
-                - a_dif: Diffraction complex field (mi.Complex2f)
-                - a_tot: Total complex field (mi.Complex2f)
-                - X, Y: Grid coordinates (mi.Float)
+                - a_los: LoS complex field (Complex2f)
+                - a_ref: Reflection complex field (Complex2f)
+                - a_dif: Diffraction complex field (Complex2f)
+                - a_tot: Total complex field (Complex2f)
+                - X, Y: Grid coordinates (Float)
                 - tx_pos_3d: Transmitter position tuple
                 - calculation_height: Z height used
                 - grid_size: Grid resolution used
@@ -89,12 +89,12 @@ class Tracer:
         """
         timing = {} if return_timing else None
 
-        # Ensure tx_pos is mi.Point3f for gradient-preserving computation
-        if not isinstance(tx_pos, mi.Point3f):
+        # Ensure tx_pos is Point3f for gradient-preserving computation
+        if not isinstance(tx_pos, Point3f):
             if hasattr(tx_pos, 'item'):
-                tx_pos = mi.Point3f(tx_pos[0].item(), tx_pos[1].item(), tx_pos[2].item())
+                tx_pos = Point3f(tx_pos[0].item(), tx_pos[1].item(), tx_pos[2].item())
             else:
-                tx_pos = mi.Point3f(float(tx_pos[0]), float(tx_pos[1]), float(tx_pos[2]))
+                tx_pos = Point3f(float(tx_pos[0]), float(tx_pos[1]), float(tx_pos[2]))
 
         if calculation_height is None:
             calculation_height = scalar(tx_pos.z)
@@ -120,7 +120,7 @@ class Tracer:
             print("Warning: No valid vertical edges found!")
 
         X, Y = coords['X'], coords['Y']
-        rx_z = mi.Float(calculation_height)
+        rx_z = Float(calculation_height)
 
         # === Compute LoS field ===
         if return_timing:
@@ -168,8 +168,8 @@ class Tracer:
         tot_imag = a_los.imag + a_ref_total.imag + dif_imag
 
         # Create complex field objects
-        a_dif = mi.Complex2f(dif_real, dif_imag)
-        a_tot = mi.Complex2f(tot_real, tot_imag)
+        a_dif = Complex2f(dif_real, dif_imag)
+        a_tot = Complex2f(tot_real, tot_imag)
 
         dr.eval(a_los, a_ref_total, a_dif, a_tot)
 

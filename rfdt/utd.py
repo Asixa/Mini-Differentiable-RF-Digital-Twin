@@ -1,28 +1,28 @@
 from __future__ import annotations
 
-"""UTD Diffraction - Kouyoumjian-Pathak formulation using DrJit/Mitsuba"""
+"""UTD Diffraction - Kouyoumjian-Pathak formulation using DrJit"""
 import drjit as dr
-import mitsuba as mi
 
 from .constants import EPSILON_0, SMALL_EPS
+from .rt_backend import Float, Complex2f
 
-def _cot(x: mi.Float) -> mi.Float:
+def _cot(x: Float) -> Float:
     y = dr.rcp(dr.tan(x))
     y = dr.select(dr.isnan(y), 0, y)
     y = dr.select(dr.isinf(y), 0, y)
     return y
 
 
-def cot(x: mi.Float, eps: float = SMALL_EPS) -> mi.Float:
+def cot(x: Float, eps: float = SMALL_EPS) -> Float:
     sin_x, cos_x = dr.sincos(x)
-    eps_f = mi.Float(eps)
+    eps_f = Float(eps)
     denom = dr.select(dr.abs(sin_x) < eps_f, dr.sign(sin_x + eps_f) * eps_f, sin_x)
     y = cos_x / denom
     y = dr.select(dr.isnan(y), 0, y)
     y = dr.select(dr.isinf(y), 0, y)
     return y
 
-def fresnel_integral(x: mi.Float) -> mi.Complex2f:
+def fresnel_integral(x: Float) -> Complex2f:
     """Fresnel integral using Boersma coefficients (loop unrolled for GPU efficiency)."""
     # Boersma coefficients for x < 4
     a0, a1, a2, a3 = +1.595769140, -0.000001702, -6.808568854, -0.000576361
@@ -61,31 +61,31 @@ def fresnel_integral(x: mi.Float) -> mi.Complex2f:
 
     # Compute polynomial using Horner-like grouping (unrolled, no Python loop)
     # r_part = sum(coef[n] * arg^n) for n=0..11
-    r_coef = dr.select(cond, mi.Float(a0), mi.Float(c0)) + \
-             dr.select(cond, mi.Float(a1), mi.Float(c1)) * arg + \
-             dr.select(cond, mi.Float(a2), mi.Float(c2)) * arg2 + \
-             dr.select(cond, mi.Float(a3), mi.Float(c3)) * arg3 + \
-             dr.select(cond, mi.Float(a4), mi.Float(c4)) * arg4 + \
-             dr.select(cond, mi.Float(a5), mi.Float(c5)) * arg5 + \
-             dr.select(cond, mi.Float(a6), mi.Float(c6)) * arg6 + \
-             dr.select(cond, mi.Float(a7), mi.Float(c7)) * arg7 + \
-             dr.select(cond, mi.Float(a8), mi.Float(c8)) * arg8 + \
-             dr.select(cond, mi.Float(a9), mi.Float(c9)) * arg9 + \
-             dr.select(cond, mi.Float(a10), mi.Float(c10)) * arg10 + \
-             dr.select(cond, mi.Float(a11), mi.Float(c11)) * arg11
+    r_coef = dr.select(cond, Float(a0), Float(c0)) + \
+             dr.select(cond, Float(a1), Float(c1)) * arg + \
+             dr.select(cond, Float(a2), Float(c2)) * arg2 + \
+             dr.select(cond, Float(a3), Float(c3)) * arg3 + \
+             dr.select(cond, Float(a4), Float(c4)) * arg4 + \
+             dr.select(cond, Float(a5), Float(c5)) * arg5 + \
+             dr.select(cond, Float(a6), Float(c6)) * arg6 + \
+             dr.select(cond, Float(a7), Float(c7)) * arg7 + \
+             dr.select(cond, Float(a8), Float(c8)) * arg8 + \
+             dr.select(cond, Float(a9), Float(c9)) * arg9 + \
+             dr.select(cond, Float(a10), Float(c10)) * arg10 + \
+             dr.select(cond, Float(a11), Float(c11)) * arg11
 
-    i_coef = dr.select(cond, mi.Float(b0), mi.Float(d0)) + \
-             dr.select(cond, mi.Float(b1), mi.Float(d1)) * arg + \
-             dr.select(cond, mi.Float(b2), mi.Float(d2)) * arg2 + \
-             dr.select(cond, mi.Float(b3), mi.Float(d3)) * arg3 + \
-             dr.select(cond, mi.Float(b4), mi.Float(d4)) * arg4 + \
-             dr.select(cond, mi.Float(b5), mi.Float(d5)) * arg5 + \
-             dr.select(cond, mi.Float(b6), mi.Float(d6)) * arg6 + \
-             dr.select(cond, mi.Float(b7), mi.Float(d7)) * arg7 + \
-             dr.select(cond, mi.Float(b8), mi.Float(d8)) * arg8 + \
-             dr.select(cond, mi.Float(b9), mi.Float(d9)) * arg9 + \
-             dr.select(cond, mi.Float(b10), mi.Float(d10)) * arg10 + \
-             dr.select(cond, mi.Float(b11), mi.Float(d11)) * arg11
+    i_coef = dr.select(cond, Float(b0), Float(d0)) + \
+             dr.select(cond, Float(b1), Float(d1)) * arg + \
+             dr.select(cond, Float(b2), Float(d2)) * arg2 + \
+             dr.select(cond, Float(b3), Float(d3)) * arg3 + \
+             dr.select(cond, Float(b4), Float(d4)) * arg4 + \
+             dr.select(cond, Float(b5), Float(d5)) * arg5 + \
+             dr.select(cond, Float(b6), Float(d6)) * arg6 + \
+             dr.select(cond, Float(b7), Float(d7)) * arg7 + \
+             dr.select(cond, Float(b8), Float(d8)) * arg8 + \
+             dr.select(cond, Float(b9), Float(d9)) * arg9 + \
+             dr.select(cond, Float(b10), Float(d10)) * arg10 + \
+             dr.select(cond, Float(b11), Float(d11)) * arg11
 
     arg_sqrt = dr.sqrt(arg)
     r_part = r_coef * arg_sqrt
@@ -98,24 +98,24 @@ def fresnel_integral(x: mi.Float) -> mi.Complex2f:
     s_out = dr.select(cond, f_i, f_i + 0.5)
     c_out = dr.select(x_pos, c_out, -c_out)
     s_out = dr.select(x_pos, s_out, -s_out)
-    return mi.Complex2f(c_out, s_out)
+    return Complex2f(c_out, s_out)
 
-def f_utd(x: mi.Float) -> mi.Complex2f:
+def f_utd(x: Float) -> Complex2f:
     """UTD transition function: F(x) = sqrt(πx/2) * e^(jx) * (1 + j - 2j*F_c*(x))"""
-    f = mi.Complex2f(1, 1)
-    f -= mi.Complex2f(0, 2) * dr.conj(fresnel_integral(x))
+    f = Complex2f(1, 1)
+    f -= Complex2f(0, 2) * dr.conj(fresnel_integral(x))
     f *= dr.sqrt(dr.pi * x / 2)
-    f *= dr.exp(mi.Complex2f(0, x))
+    f *= dr.exp(Complex2f(0, x))
     return f
 
-def complex_sqrt(z: mi.Complex2f) -> mi.Complex2f:
+def complex_sqrt(z: Complex2f) -> Complex2f:
     r, x, y = dr.abs(z), dr.real(z), dr.imag(z)
-    return mi.Complex2f(dr.sqrt((r + x) / 2), dr.sign(y) * dr.sqrt((r - x) / 2))
+    return Complex2f(dr.sqrt((r + x) / 2), dr.sign(y) * dr.sqrt((r - x) / 2))
 
-def complex_relative_permittivity(eta_r: mi.Float, sigma: mi.Float, omega: mi.Float) -> mi.Complex2f:
-    return mi.Complex2f(eta_r, -sigma * dr.rcp(omega * EPSILON_0))
+def complex_relative_permittivity(eta_r: Float, sigma: Float, omega: Float) -> Complex2f:
+    return Complex2f(eta_r, -sigma * dr.rcp(omega * EPSILON_0))
 
-def fresnel_reflection(cos_theta: mi.Float, eta: mi.Complex2f) -> tuple[mi.Complex2f, mi.Complex2f]:
+def fresnel_reflection(cos_theta: Float, eta: Complex2f) -> tuple[Complex2f, Complex2f]:
     """Returns (r_te, r_tm) Fresnel reflection coefficients."""
     sin_theta_sqr = 1.0 - cos_theta * cos_theta
     a = complex_sqrt(eta - sin_theta_sqr)
@@ -123,7 +123,7 @@ def fresnel_reflection(cos_theta: mi.Float, eta: mi.Complex2f) -> tuple[mi.Compl
     r_tm = (eta * cos_theta - a) * dr.rcp(eta * cos_theta + a)
     return r_te, r_tm
 
-def _compute_a_pm(beta: mi.Float, n: mi.Float) -> tuple[mi.Float, mi.Float]:
+def _compute_a_pm(beta: Float, n: Float) -> tuple[Float, Float]:
     two_n_pi = 2 * n * dr.pi
     n_plus = dr.round((beta + dr.pi) * dr.rcp(two_n_pi))
     n_minus = dr.round((beta - dr.pi) * dr.rcp(two_n_pi))
@@ -131,11 +131,11 @@ def _compute_a_pm(beta: mi.Float, n: mi.Float) -> tuple[mi.Float, mi.Float]:
     a_minus = 2 * dr.cos((two_n_pi * n_minus - beta) / 2) ** 2
     return a_plus, a_minus
 
-def diffraction_coefficient(phi: mi.Float, phi_prime: mi.Float, n: mi.Float, k: mi.Float, L: mi.Float,
-                            beta0: mi.Float = None, R0: mi.Complex2f = None, Rn: mi.Complex2f = None) -> mi.Complex2f:
+def diffraction_coefficient(phi: Float, phi_prime: Float, n: Float, k: Float, L: Float,
+                            beta0: Float = None, R0: Complex2f = None, Rn: Complex2f = None) -> Complex2f:
     """UTD diffraction coefficient for PEC wedge. n = exterior_angle/π, L = s*s'/(s+s')*sin²(β₀)"""
-    sin_beta0 = mi.Float(1.0) if beta0 is None else dr.sin(beta0)
-    factor = -dr.exp(mi.Complex2f(0, -dr.pi / 4))
+    sin_beta0 = Float(1.0) if beta0 is None else dr.sin(beta0)
+    factor = -dr.exp(Complex2f(0, -dr.pi / 4))
     factor *= dr.rcp(2 * n * dr.safe_sqrt(dr.two_pi * k) * sin_beta0)
     dif_phi, sum_phi = phi - phi_prime, phi + phi_prime
     a1, a2 = _compute_a_pm(dif_phi, n)
@@ -145,12 +145,12 @@ def diffraction_coefficient(phi: mi.Float, phi_prime: mi.Float, n: mi.Float, k: 
     d2 = cot((dr.pi - dif_phi) / two_n) * f_utd(kL * a2)
     d3 = cot((dr.pi + sum_phi) / two_n) * f_utd(kL * a3)
     d4 = cot((dr.pi - sum_phi) / two_n) * f_utd(kL * a4)
-    R0 = mi.Complex2f(-1, 0) if R0 is None else R0
-    Rn = mi.Complex2f(-1, 0) if Rn is None else Rn
+    R0 = Complex2f(-1, 0) if R0 is None else R0
+    Rn = Complex2f(-1, 0) if Rn is None else Rn
     return factor * (d1 + d2 + R0 * d3 + Rn * d4)
 
-def diffraction_coefficient_2d(phi: mi.Float, phi_prime: mi.Float, n: mi.Float, k: mi.Float,
-                               s: mi.Float, s_prime: mi.Float, R0: mi.Complex2f = None, Rn: mi.Complex2f = None) -> mi.Complex2f:
+def diffraction_coefficient_2d(phi: Float, phi_prime: Float, n: Float, k: Float,
+                               s: Float, s_prime: Float, R0: Complex2f = None, Rn: Complex2f = None) -> Complex2f:
     """2D wrapper: computes L = s*s'/(s+s')"""
     L = s * s_prime * dr.rcp(s + s_prime)
     return diffraction_coefficient(phi, phi_prime, n, k, L, R0=R0, Rn=Rn)

@@ -1,7 +1,7 @@
 """Shared numeric constants for RFDT."""
 
-# Default Mitsuba variant.
-DEFAULT_VARIANT = "cuda_ad_rgb"
+# Default DrJit backend label used by demos and compatibility code.
+DEFAULT_VARIANT = "cuda_ad"
 
 # Small epsilon for denominators and normalization.
 EPS = 1e-10

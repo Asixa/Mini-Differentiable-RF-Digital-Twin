@@ -3,12 +3,7 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
-import mitsuba as mi
 import drjit as dr
-
-from rfdt.constants import DEFAULT_VARIANT
-
-mi.set_variant(DEFAULT_VARIANT)
 
 from rfdt import (
     create_cube_mesh, Tracer, Scene,
@@ -16,6 +11,7 @@ from rfdt import (
     to_power_db, to_numpy
 )
 from rfdt.utils import to_numpy_2d
+from rfdt.rt_backend import Point3f, Vector3f, Complex2f
 
 
 # ---------------------------------------------------------------------------
@@ -27,13 +23,13 @@ def compute_field(center, size, freq, tx_pos, range_x, range_y, grid_size,
     """Compute total field for a cube mesh.
 
     Args:
-        center: Cube center - tuple or mi.Point3f (pass mi.Point3f for AD)
+        center: Cube center - tuple or Point3f (pass Point3f for AD)
         size: Cube side length
         freq: Signal frequency in Hz
-        tx_pos: Transmitter position - tuple or mi.Point3f (pass mi.Point3f for AD)
+        tx_pos: Transmitter position - tuple or Point3f (pass Point3f for AD)
         range_x, range_y: Grid bounds
         grid_size: Grid resolution
-        rotation: Z-axis rotation in radians (mi.Float for AD, float/None otherwise)
+        rotation: Z-axis rotation in radians (Float for AD, float/None otherwise)
         n_rays: Number of reflection rays
         max_reflections: Maximum reflection bounces
         reflection_coef: Reflection coefficient
@@ -43,7 +39,7 @@ def compute_field(center, size, freq, tx_pos, range_x, range_y, grid_size,
         scene: Scene object
     """
     if isinstance(center, tuple):
-        center_pt = mi.Point3f(*center)
+        center_pt = Point3f(*center)
     else:
         center_pt = center
 
@@ -257,7 +253,7 @@ def plot_mesh_2d(result, scene, frequency, range_x=(-8, 8), range_y=(-8, 8)):
     ref_db = to_power_db(result['a_ref'])
     dif_db = to_power_db(result['a_dif'])
 
-    a_ref_dif = mi.Complex2f(
+    a_ref_dif = Complex2f(
         result['a_ref'].real + result['a_dif'].real,
         result['a_ref'].imag + result['a_dif'].imag
     )
@@ -317,14 +313,14 @@ def compute_reflection_ad_gradient(center_coords, size, freq, tx_pos, range_x, r
     cx, cy, cz = center_coords
 
     if grad_axis == 0:
-        tangent = mi.Vector3f(1.0, 0.0, 0.0)
+        tangent = Vector3f(1.0, 0.0, 0.0)
     elif grad_axis == 1:
-        tangent = mi.Vector3f(0.0, 1.0, 0.0)
+        tangent = Vector3f(0.0, 1.0, 0.0)
     else:
-        tangent = mi.Vector3f(0.0, 0.0, 1.0)
+        tangent = Vector3f(0.0, 0.0, 1.0)
 
     def run_trace_and_get_grad(target='ref_db'):
-        center = mi.Point3f(cx, cy, cz)
+        center = Point3f(cx, cy, cz)
         dr.enable_grad(center)
         dr.set_grad(center, tangent)
 
@@ -387,7 +383,7 @@ def compute_reflection_fd_gradient(center_np, size, freq, tx_pos, range_x, range
         dict with keys: ref_db, ref_grad_db, ref_real_grad, ref_imag_grad, result, scene
     """
     def _compute(c_np):
-        center = mi.Point3f(float(c_np[0]), float(c_np[1]), float(c_np[2]))
+        center = Point3f(float(c_np[0]), float(c_np[1]), float(c_np[2]))
         vertices, faces = create_cube_mesh(center=center, size=size, rotation=rotation)
         scene = Scene(vertices, faces)
         tracer = Tracer(

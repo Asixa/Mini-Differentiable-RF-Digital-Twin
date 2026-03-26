@@ -1,9 +1,9 @@
 """Utility functions for DrJit operations."""
 import drjit as dr
-import mitsuba as mi
 import numpy as np
 
 from .constants import EPS, POWER_DB_FLOOR
+from .rt_backend import Float, Vector2f, Vector3f, Point3f
 
 
 # -----------------------------------------------------------------------------
@@ -14,13 +14,13 @@ def to_power_db(a, imag=None):
     """Convert complex field to power in dB (gradient-preserving).
 
     Args:
-        a: mi.Complex2f, OR mi.Float real part (if imag is provided)
-        imag: mi.Float imaginary part (optional, for separate real/imag input)
+        a: Complex2f, OR Float real part (if imag is provided)
+        imag: Float imaginary part (optional, for separate real/imag input)
 
     Returns:
-        Power in dB (mi.Float)
+        Power in dB (Float)
     """
-    log10 = dr.log(mi.Float(10))
+    log10 = dr.log(Float(10))
     if imag is not None:
         # Separate real/imag input
         power = a * a + imag * imag
@@ -65,7 +65,7 @@ def scalar(v):
     Works with both scalar and array types.
 
     Args:
-        v: DrJit value (mi.Float, float, etc.)
+        v: DrJit value (Float, float, etc.)
 
     Returns:
         Python float

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import math
 import drjit as dr
-import mitsuba as mi
+
+from .rt_backend import Float, UInt32, Int32
 
 C = 299792458.0
 
@@ -70,7 +71,7 @@ class Field:
         wavelength = C / frequency
         return cls.from_wavelength(bounds, wavelength, resolution)
 
-    def pos_to_idx(self, x: mi.Float, y: mi.Float) -> mi.UInt32:
+    def pos_to_idx(self, x, y):
         """
         Convert (x, y) positions to flattened field cell indices.
 
@@ -82,9 +83,9 @@ class Field:
         """
         (x_min, _), (y_min, _) = self.bounds
         nx, ny = self.size
-        ix = dr.clamp(mi.Int32((x - x_min) / self.cell_size[0]), 0, nx - 1)
-        iy = dr.clamp(mi.Int32((y - y_min) / self.cell_size[1]), 0, ny - 1)
-        return mi.UInt32(iy * nx + ix)
+        ix = dr.clamp(Int32((x - x_min) / self.cell_size[0]), 0, nx - 1)
+        iy = dr.clamp(Int32((y - y_min) / self.cell_size[1]), 0, ny - 1)
+        return UInt32(iy * nx + ix)
 
     def get_coordinates(self) -> dict:
         """
@@ -103,9 +104,9 @@ class Field:
         x_step = (x_max - x_min) / (nx - 1) if nx > 1 else 0
         y_step = (y_max - y_min) / (ny - 1) if ny > 1 else 0
 
-        idx = dr.arange(mi.Float, nx)
-        x_coords = mi.Float(x_min) + idx * mi.Float(x_step)
-        y_coords = mi.Float(y_min) + idx * mi.Float(y_step)
+        idx = dr.arange(Float, nx)
+        x_coords = Float(x_min) + idx * Float(x_step)
+        y_coords = Float(y_min) + idx * Float(y_step)
 
         X = dr.tile(x_coords, ny)
         Y = dr.repeat(y_coords, nx)
@@ -123,12 +124,12 @@ class Field:
         return coord_data
 
     @property
-    def X(self) -> mi.Float:
+    def X(self):
         """Flattened X coordinates."""
         return self.get_coordinates()['X']
 
     @property
-    def Y(self) -> mi.Float:
+    def Y(self):
         """Flattened Y coordinates."""
         return self.get_coordinates()['Y']
 

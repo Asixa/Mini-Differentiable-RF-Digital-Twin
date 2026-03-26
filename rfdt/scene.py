@@ -1,18 +1,21 @@
 """3D Scene and Mesh Processing for UTD Ray Tracing (Pure DrJit)"""
 
 import drjit as dr
-import mitsuba as mi
 from collections import defaultdict
 
 from .constants import EDGE_2D_EPS, EPS, SMALL_EPS
 from .types import Corner2D, DiffractionPoint, Edge2D, VerticalEdge
 from .utils import scalar
 from .trace_diffraction import preload_diffraction_edges
+from .rt_backend import (
+    Float, UInt32, Point3f, Point2f, Vector2f, Vector3f, Vector3u,
+    build_scene, update_vertices as rt_update_vertices,
+)
 
 
 class Scene:
     """
-    Geometry container that owns Mitsuba scene, edge caches, and mesh-dependent data.
+    Geometry container that owns the RayD scene, edge caches, and mesh data.
     Assumes mesh topology is fixed; only vertex positions move.
     """
 
@@ -26,8 +29,8 @@ class Scene:
         edge_to_faces = extract_edges_with_adjacency(self.vertices, self.faces)
         self._edge_topology = sorted(edge_to_faces.items(), key=lambda x: x[0])
 
-        # Mitsuba scene + params for updates
-        self.mi_scene, self._scene_params, self._scene_vertex_key, self._n_verts = self._build_mi_scene(
+        # RayD scene + params for updates
+        self.rt_scene, self._scene_params, self._scene_vertex_key, self._n_verts = self._build_rt_scene(
             self.vertices, self.faces
         )
 
@@ -37,45 +40,23 @@ class Scene:
         self._preload_triangle_data()
 
     # ------------------------------------------------------------------ #
-    # Mesh + Mitsuba helpers
+    # Mesh + runtime helpers
     # ------------------------------------------------------------------ #
     def _compute_mesh_centers(self, vertices):
         n_verts = dr.width(vertices)
-        mesh_center_3d = mi.Point3f(
+        mesh_center_3d = Point3f(
             dr.sum(vertices.x) / n_verts,
             dr.sum(vertices.y) / n_verts,
             dr.sum(vertices.z) / n_verts
         )
-        mesh_center_2d = mi.Vector2f(
+        mesh_center_2d = Vector2f(
             dr.sum(vertices.x) / n_verts,
             dr.sum(vertices.y) / n_verts
         )
         return n_verts, mesh_center_3d, mesh_center_2d
 
-    def _build_mi_scene(self, vertices, faces):
-        n_verts = dr.width(vertices)
-        n_faces = dr.width(faces)
-
-        mesh = mi.Mesh(
-            name='obstacle',
-            vertex_count=n_verts,
-            face_count=n_faces,
-            has_vertex_normals=False,
-            has_vertex_texcoords=False
-        )
-
-        mesh_params = mi.traverse(mesh)
-        mesh_params['vertex_positions'] = dr.ravel(vertices)
-        mesh_params['faces'] = dr.ravel(faces)
-        mesh_params.update()
-
-        scene_dict = {'type': 'scene', 'mesh': mesh}
-        scene = mi.load_dict(scene_dict)
-
-        scene_params = mi.traverse(scene)
-        scene_vertex_key = 'mesh.vertex_positions'
-
-        return scene, scene_params, scene_vertex_key, n_verts
+    def _build_rt_scene(self, vertices, faces):
+        return build_scene(vertices, faces)
 
     def _build_vertical_edges(self):
         self._n_verts, self._mesh_center_3d, self._mesh_center_2d = self._compute_mesh_centers(self.vertices)
@@ -115,9 +96,9 @@ class Scene:
         v1_idx = self.faces.y
         v2_idx = self.faces.z
 
-        v0 = dr.gather(mi.Point3f, self.vertices, v0_idx)
-        v1 = dr.gather(mi.Point3f, self.vertices, v1_idx)
-        v2 = dr.gather(mi.Point3f, self.vertices, v2_idx)
+        v0 = dr.gather(Point3f, self.vertices, v0_idx)
+        v1 = dr.gather(Point3f, self.vertices, v1_idx)
+        v2 = dr.gather(Point3f, self.vertices, v2_idx)
 
         self.tri_data_gpu = {
             'v0': v0,
@@ -130,11 +111,7 @@ class Scene:
     # Public API
     # ------------------------------------------------------------------ #
     def update_vertices(self, vertices, recompute_edges: bool = True):
-        vertex_key = self._scene_vertex_key
-
-        new_positions = dr.ravel(vertices * 1.0)
-        self._scene_params[vertex_key] = new_positions
-        self._scene_params.update()
+        rt_update_vertices(self._scene_params, self._scene_vertex_key, vertices)
 
         self.vertices = vertices
         self._mesh_version += 1
@@ -186,32 +163,32 @@ def create_cube_mesh(center=None, size=None, rotation=None):
     Create cube mesh using DrJit (differentiable).
 
     Args:
-        center: Cube center position (x, y, z) - mi.Point3f (single point) or tuple/list
-        size: Cube side length - mi.Float (scalar) or float
-        rotation: Rotation angle around Z-axis in radians - mi.Float (scalar) or float
+        center: Cube center position (x, y, z) - Point3f (single point) or tuple/list
+        size: Cube side length - Float (scalar) or float
+        rotation: Rotation angle around Z-axis in radians - Float (scalar) or float
                   If None, no rotation is applied.
 
     Returns:
-        vertices: mi.Point3f with 8 vertices (differentiable, SoA format)
-        faces: mi.Vector3u with 12 triangle faces (topology, not differentiable)
+        vertices: Point3f with 8 vertices (differentiable, SoA format)
+        faces: Vector3u with 12 triangle faces (topology, not differentiable)
     """
     # Default values
     if center is None:
-        center = mi.Point3f(0.0, 0.0, 1.0)
-    elif isinstance(center, mi.Point3f):
+        center = Point3f(0.0, 0.0, 1.0)
+    elif isinstance(center, Point3f):
         pass  # Already correct type
     else:
         # tuple/list/array input
-        center = mi.Point3f(float(center[0]), float(center[1]), float(center[2]))
+        center = Point3f(float(center[0]), float(center[1]), float(center[2]))
 
     if size is None:
-        size = mi.Float(4.0)
-    elif not isinstance(size, mi.Float):
-        size = mi.Float(float(size))
+        size = Float(4.0)
+    elif not isinstance(size, Float):
+        size = Float(float(size))
 
     # Handle rotation parameter
-    if rotation is not None and not isinstance(rotation, mi.Float):
-        rotation = mi.Float(float(rotation))
+    if rotation is not None and not isinstance(rotation, Float):
+        rotation = Float(float(rotation))
 
     # Extract components (preserves gradient if center has gradient enabled)
     cx = center.x
@@ -236,7 +213,7 @@ def create_cube_mesh(center=None, size=None, rotation=None):
         local_y = rotated_y
 
     # Translate to world coordinates
-    vertices = mi.Point3f(
+    vertices = Point3f(
         cx + local_x,
         cy + local_y,
         cz + local_z
@@ -244,13 +221,13 @@ def create_cube_mesh(center=None, size=None, rotation=None):
 
     # 12 triangle faces (topology, no gradient needed)
     # Winding order: counterclockwise when viewed from outside (outward normal)
-    faces = mi.Vector3u(
+    faces = Vector3u(
         # v0 indices
-        mi.UInt32(0, 0, 4, 4, 0, 0, 2, 2, 0, 0, 1, 1),
+        UInt32(0, 0, 4, 4, 0, 0, 2, 2, 0, 0, 1, 1),
         # v1 indices
-        mi.UInt32(2, 3, 5, 6, 1, 5, 3, 7, 7, 4, 2, 6),
+        UInt32(2, 3, 5, 6, 1, 5, 3, 7, 7, 4, 2, 6),
         # v2 indices
-        mi.UInt32(1, 2, 6, 7, 5, 4, 7, 6, 3, 7, 6, 5)
+        UInt32(1, 2, 6, 7, 5, 4, 7, 6, 3, 7, 6, 5)
     )
 
     return vertices, faces
@@ -262,15 +239,15 @@ def create_prism_mesh(n_sides=5, center=None, radius=None, height=None, rotation
 
     Args:
         n_sides: Number of sides (3=triangle, 4=square, 5=pentagon, 6=hexagon, etc.)
-        center: Prism center position (x, y, z) - mi.Point3f or tuple/list
-        radius: Polygon circumradius - mi.Float or float
-        height: Prism height - mi.Float or float
-        rotation: Rotation angle around Z-axis in radians - mi.Float or float
+        center: Prism center position (x, y, z) - Point3f or tuple/list
+        radius: Polygon circumradius - Float or float
+        height: Prism height - Float or float
+        rotation: Rotation angle around Z-axis in radians - Float or float
                   If None, no rotation is applied.
 
     Returns:
-        vertices: mi.Point3f with 2*n_sides vertices (differentiable, SoA format)
-        faces: mi.Vector3u with triangle faces (topology, not differentiable)
+        vertices: Point3f with 2*n_sides vertices (differentiable, SoA format)
+        faces: Vector3u with triangle faces (topology, not differentiable)
     """
     import math
 
@@ -280,25 +257,25 @@ def create_prism_mesh(n_sides=5, center=None, radius=None, height=None, rotation
 
     # Default values
     if center is None:
-        center = mi.Point3f(0.0, 0.0, 1.0)
-    elif isinstance(center, mi.Point3f):
+        center = Point3f(0.0, 0.0, 1.0)
+    elif isinstance(center, Point3f):
         pass
     else:
-        center = mi.Point3f(float(center[0]), float(center[1]), float(center[2]))
+        center = Point3f(float(center[0]), float(center[1]), float(center[2]))
 
     if radius is None:
-        radius = mi.Float(2.0)
-    elif not isinstance(radius, mi.Float):
-        radius = mi.Float(float(radius))
+        radius = Float(2.0)
+    elif not isinstance(radius, Float):
+        radius = Float(float(radius))
 
     if height is None:
-        height = mi.Float(4.0)
-    elif not isinstance(height, mi.Float):
-        height = mi.Float(float(height))
+        height = Float(4.0)
+    elif not isinstance(height, Float):
+        height = Float(float(height))
 
     # Handle rotation parameter
-    if rotation is not None and not isinstance(rotation, mi.Float):
-        rotation = mi.Float(float(rotation))
+    if rotation is not None and not isinstance(rotation, Float):
+        rotation = Float(float(rotation))
 
     cx = center.x
     cy = center.y
@@ -342,7 +319,7 @@ def create_prism_mesh(n_sides=5, center=None, radius=None, height=None, rotation
         local_y = rotated_y
 
     # Translate to world coordinates
-    vertices = mi.Point3f(
+    vertices = Point3f(
         cx + local_x,
         cy + local_y,
         cz + local_z
@@ -377,10 +354,10 @@ def create_prism_mesh(n_sides=5, center=None, radius=None, height=None, rotation
         v1_list.append(next_i + n_sides)
         v2_list.append(i + n_sides)
 
-    faces = mi.Vector3u(
-        mi.UInt32(*v0_list),
-        mi.UInt32(*v1_list),
-        mi.UInt32(*v2_list)
+    faces = Vector3u(
+        UInt32(*v0_list),
+        UInt32(*v1_list),
+        UInt32(*v2_list)
     )
 
     return vertices, faces
@@ -391,14 +368,14 @@ def create_pentagonal_prism_mesh(center=None, radius=None, height=None, rotation
     Create pentagonal prism mesh (convenience wrapper for create_prism_mesh).
 
     Args:
-        center: Prism center position (x, y, z) - mi.Point3f or tuple/list
-        radius: Pentagon circumradius - mi.Float or float
-        height: Prism height - mi.Float or float
-        rotation: Rotation angle around Z-axis in radians - mi.Float or float
+        center: Prism center position (x, y, z) - Point3f or tuple/list
+        radius: Pentagon circumradius - Float or float
+        height: Prism height - Float or float
+        rotation: Rotation angle around Z-axis in radians - Float or float
 
     Returns:
-        vertices: mi.Point3f with 10 vertices (differentiable, SoA format)
-        faces: mi.Vector3u with 16 triangle faces (topology, not differentiable)
+        vertices: Point3f with 10 vertices (differentiable, SoA format)
+        faces: Vector3u with 16 triangle faces (topology, not differentiable)
     """
     return create_prism_mesh(n_sides=5, center=center, radius=radius, height=height, rotation=rotation)
 
@@ -408,7 +385,7 @@ def extract_edges_with_adjacency(vertices, faces):
     Extract all edges and their adjacent faces from triangle mesh.
 
     Args:
-        faces: mi.Vector3u with M triangle faces (SoA format)
+        faces: Vector3u with M triangle faces (SoA format)
 
     Returns:
         edge_to_faces: dict, {(v0_idx, v1_idx): [face_idx_list]}
@@ -449,17 +426,17 @@ def compute_face_normals(vertices, faces, mesh_center_3d=None, n_verts=None):
     if n_verts is None:
         n_verts = dr.width(vertices)
     if mesh_center_3d is None:
-        mesh_center_3d = mi.Point3f(
+        mesh_center_3d = Point3f(
             dr.sum(vertices.x) / n_verts,
             dr.sum(vertices.y) / n_verts,
             dr.sum(vertices.z) / n_verts
         )
 
     # Vectorized gather per-face
-    face_idx = dr.arange(mi.UInt32, n_faces)
-    va = dr.gather(mi.Point3f, vertices, dr.gather(mi.UInt32, f0, face_idx))
-    vb = dr.gather(mi.Point3f, vertices, dr.gather(mi.UInt32, f1, face_idx))
-    vc = dr.gather(mi.Point3f, vertices, dr.gather(mi.UInt32, f2, face_idx))
+    face_idx = dr.arange(UInt32, n_faces)
+    va = dr.gather(Point3f, vertices, dr.gather(UInt32, f0, face_idx))
+    vb = dr.gather(Point3f, vertices, dr.gather(UInt32, f1, face_idx))
+    vc = dr.gather(Point3f, vertices, dr.gather(UInt32, f2, face_idx))
 
     normal = dr.cross(vb - va, vc - va)
     norm_len = dr.norm(normal) + EPS
@@ -477,7 +454,7 @@ def filter_vertical_edges(vertices, edge_to_faces, vertical_ratio=0.7):
     Filter edges that are primarily vertical (DrJit, preserves gradient).
 
     Args:
-        vertices: mi.Point3f with N vertices (SoA format)
+        vertices: Point3f with N vertices (SoA format)
         edge_to_faces: Edge to faces mapping dict
         vertical_ratio: Vertical component threshold, |z_component| / length > vertical_ratio
                         Default 0.7 corresponds to about 45 degrees
@@ -490,10 +467,10 @@ def filter_vertical_edges(vertices, edge_to_faces, vertical_ratio=0.7):
     for edge_key, face_list in edge_to_faces:
         v0_idx, v1_idx = edge_key
 
-        idx0 = mi.UInt32(v0_idx)
-        idx1 = mi.UInt32(v1_idx)
-        p0 = dr.gather(mi.Point3f, vertices, idx0)
-        p1 = dr.gather(mi.Point3f, vertices, idx1)
+        idx0 = UInt32(v0_idx)
+        idx1 = UInt32(v1_idx)
+        p0 = dr.gather(Point3f, vertices, idx0)
+        p1 = dr.gather(Point3f, vertices, idx1)
         edge_vec = p1 - p0
         edge_len = dr.norm(edge_vec) + EPS
 
@@ -523,12 +500,12 @@ def compute_edge_geometry(edge_info, vertices, faces,
 
     Args:
         edge_info: VerticalEdge (from filter_vertical_edges)
-        vertices: mi.Point3f with N vertices
-        faces: mi.Vector3u with M faces
+        vertices: Point3f with N vertices
+        faces: Vector3u with M faces
         mesh_center_3d: Optional cached mesh center in 3D
         mesh_center_2d: Optional cached mesh center in 2D
         n_verts: Optional cached vertex count
-        face_normals: Optional precomputed face normals (mi.Vector3f array)
+        face_normals: Optional precomputed face normals (Vector3f array)
 
     Returns:
         edge_info: VerticalEdge with normal_2d, wedge_n, face_normals_3d set
@@ -540,23 +517,23 @@ def compute_edge_geometry(edge_info, vertices, faces,
     face_indices = edge_info.adjacent_faces
 
     # Get vertices using dr.gather (preserves gradient)
-    idx0 = mi.UInt32(v0_idx)
-    idx1 = mi.UInt32(v1_idx)
-    p0 = dr.gather(mi.Point3f, vertices, idx0)
-    p1 = dr.gather(mi.Point3f, vertices, idx1)
+    idx0 = UInt32(v0_idx)
+    idx1 = UInt32(v1_idx)
+    p0 = dr.gather(Point3f, vertices, idx0)
+    p1 = dr.gather(Point3f, vertices, idx1)
     edge_vec = p1 - p0
 
     # Compute mesh centers if not provided
     if n_verts is None:
         n_verts = dr.width(vertices)
     if mesh_center_3d is None:
-        mesh_center_3d = mi.Point3f(
+        mesh_center_3d = Point3f(
             dr.sum(vertices.x) / n_verts,
             dr.sum(vertices.y) / n_verts,
             dr.sum(vertices.z) / n_verts
         )
     if mesh_center_2d is None:
-        mesh_center_2d = mi.Vector2f(
+        mesh_center_2d = Vector2f(
             dr.sum(vertices.x) / n_verts,
             dr.sum(vertices.y) / n_verts
         )
@@ -569,22 +546,22 @@ def compute_edge_geometry(edge_info, vertices, faces,
     face_normals_3d = []
     for face_idx in face_indices:
         if face_normals is not None:
-            idx = mi.UInt32(int(face_idx))
-            normal = mi.Vector3f(
-                dr.gather(mi.Float, face_normals.x, idx),
-                dr.gather(mi.Float, face_normals.y, idx),
-                dr.gather(mi.Float, face_normals.z, idx),
+            idx = UInt32(int(face_idx))
+            normal = Vector3f(
+                dr.gather(Float, face_normals.x, idx),
+                dr.gather(Float, face_normals.y, idx),
+                dr.gather(Float, face_normals.z, idx),
             )
             face_normals_3d.append(normal)
         else:
-            idx = mi.UInt32(int(face_idx))
-            va_idx = dr.gather(mi.UInt32, f0, idx)
-            vb_idx = dr.gather(mi.UInt32, f1, idx)
-            vc_idx = dr.gather(mi.UInt32, f2, idx)
+            idx = UInt32(int(face_idx))
+            va_idx = dr.gather(UInt32, f0, idx)
+            vb_idx = dr.gather(UInt32, f1, idx)
+            vc_idx = dr.gather(UInt32, f2, idx)
 
-            va = dr.gather(mi.Point3f, vertices, va_idx)
-            vb = dr.gather(mi.Point3f, vertices, vb_idx)
-            vc = dr.gather(mi.Point3f, vertices, vc_idx)
+            va = dr.gather(Point3f, vertices, va_idx)
+            vb = dr.gather(Point3f, vertices, vb_idx)
+            vc = dr.gather(Point3f, vertices, vc_idx)
 
             normal = dr.cross(vb - va, vc - va)
             norm_len = dr.norm(normal) + EPS
@@ -600,16 +577,16 @@ def compute_edge_geometry(edge_info, vertices, faces,
     # Project to 2D normal
     if len(face_normals_3d) == 2:
         avg_normal_3d = (face_normals_3d[0] + face_normals_3d[1]) / 2
-        normal_2d = mi.Vector2f(avg_normal_3d.x, avg_normal_3d.y)
+        normal_2d = Vector2f(avg_normal_3d.x, avg_normal_3d.y)
     else:
-        normal_2d = mi.Vector2f(face_normals_3d[0].x, face_normals_3d[0].y)
+        normal_2d = Vector2f(face_normals_3d[0].x, face_normals_3d[0].y)
 
     # Normalize 2D normal
     norm_2d_len = dr.norm(normal_2d) + EPS
-    normal_2d = dr.select(norm_2d_len > EPS, normal_2d / norm_2d_len, mi.Vector2f(0, 0))
+    normal_2d = dr.select(norm_2d_len > EPS, normal_2d / norm_2d_len, Vector2f(0, 0))
 
     # Ensure normal points outward (using mesh center)
-    edge_mid_2d = mi.Vector2f((p0.x + p1.x) / 2, (p0.y + p1.y) / 2)
+    edge_mid_2d = Vector2f((p0.x + p1.x) / 2, (p0.y + p1.y) / 2)
     outward_vec = edge_mid_2d - mesh_center_2d
 
     outward_norm = dr.norm(outward_vec)
@@ -669,7 +646,7 @@ def compute_edge_geometry(edge_info, vertices, faces,
         face_normals_3d = [n0, n1]
     else:
         # Boundary edge: assume half-plane (exterior angle = 2 pi, n = 2)
-        wedge_n = mi.Float(2.0)
+        wedge_n = Float(2.0)
 
     edge_info.normal_2d = normal_2d
     edge_info.wedge_n = wedge_n
@@ -679,11 +656,11 @@ def compute_edge_geometry(edge_info, vertices, faces,
 
 def _drjit_to_key(v):
     """Convert a DrJit Vector2f to a hashable tuple key."""
-    if isinstance(v, mi.Vector2f):
+    if isinstance(v, Vector2f):
         x = scalar(v.x)
         y = scalar(v.y)
         return (round(x, 6), round(y, 6))
-    elif isinstance(v, mi.Point3f):
+    elif isinstance(v, Point3f):
         x = scalar(v.x)
         y = scalar(v.y)
         return (round(x, 6), round(y, 6))
@@ -695,7 +672,7 @@ def _drjit_to_key(v):
 
 def _vectors_close(v1, v2, tol=1e-5):
     """Check if two DrJit vectors are close."""
-    if isinstance(v1, (mi.Vector2f, mi.Vector3f, mi.Point3f)):
+    if isinstance(v1, (Vector2f, Vector3f, Point3f)):
         v1_x = scalar(v1.x)
         v1_y = scalar(v1.y)
         v2_x = scalar(v2.x)
@@ -712,7 +689,7 @@ def project_to_2d(vertical_edges, calculation_height, vertices):
     Args:
         vertical_edges: List of vertical edges (with geometry attributes)
         calculation_height: Z coordinate of calculation plane
-        vertices: mi.Point3f with N vertices
+        vertices: Point3f with N vertices
 
     Returns:
         edges_2d: list of Edge2D (p0_2d, p1_2d, normal_2d, name)
@@ -727,8 +704,8 @@ def project_to_2d(vertical_edges, calculation_height, vertices):
     corner_vertices = {}
 
     for i, edge_info in enumerate(vertical_edges):
-        p0_3d = edge_info.p0  # mi.Point3f (single point)
-        p1_3d = edge_info.p1  # mi.Point3f (single point)
+        p0_3d = edge_info.p0  # Point3f (single point)
+        p1_3d = edge_info.p1  # Point3f (single point)
 
         # Check if edge is within calculation height range
         z0 = scalar(p0_3d.z)
@@ -740,8 +717,8 @@ def project_to_2d(vertical_edges, calculation_height, vertices):
             continue  # Skip edge not at calculation height
 
         # Project to 2D
-        p0_2d = mi.Vector2f(p0_3d.x, p0_3d.y)
-        p1_2d = mi.Vector2f(p1_3d.x, p1_3d.y)
+        p0_2d = Vector2f(p0_3d.x, p0_3d.y)
+        p1_2d = Vector2f(p1_3d.x, p1_3d.y)
 
         # Check if degenerate (fully vertical edge)
         edge_len_2d = dr.norm(p1_2d - p0_2d)
@@ -749,7 +726,7 @@ def project_to_2d(vertical_edges, calculation_height, vertices):
 
         if edge_len_2d_val > EDGE_2D_EPS:
             # Non-degenerate edge: can be used for reflection and diffraction
-            normal_2d = edge_info.normal_2d if edge_info.normal_2d is not None else mi.Vector2f(0, 0)
+            normal_2d = edge_info.normal_2d if edge_info.normal_2d is not None else Vector2f(0, 0)
             edges_2d.append(Edge2D(
                 p0_2d,
                 p1_2d,
@@ -831,25 +808,25 @@ def project_to_2d(vertical_edges, calculation_height, vertices):
 
         # === Determine wedge_n ===
         if vertical_edge is not None:
-            wedge_n = vertical_edge.wedge_n if vertical_edge.wedge_n is not None else mi.Float(1.5)
+            wedge_n = vertical_edge.wedge_n if vertical_edge.wedge_n is not None else Float(1.5)
         elif len(connected_edges) == 1:
-            wedge_n = mi.Float(2.0)
+            wedge_n = Float(2.0)
         else:
             edge0 = connected_edges[0]
             edge1 = connected_edges[1]
-            wn0 = edge0.wedge_n if edge0.wedge_n is not None else mi.Float(1.5)
-            wn1 = edge1.wedge_n if edge1.wedge_n is not None else mi.Float(1.5)
+            wn0 = edge0.wedge_n if edge0.wedge_n is not None else Float(1.5)
+            wn1 = edge1.wedge_n if edge1.wedge_n is not None else Float(1.5)
             wedge_n = (wn0 + wn1) / 2
 
         # === Build face reference points ===
         if vertical_edge is not None:
-            edge_vector = vertical_edge.edge_vector  # mi.Vector3f
+            edge_vector = vertical_edge.edge_vector  # Vector3f
             e_hat = edge_vector / (dr.norm(edge_vector) + EPS)
             face_normals = vertical_edge.face_normals_3d or []
 
             if len(face_normals) >= 2:
-                n0 = face_normals[0]  # mi.Vector3f
-                nn = face_normals[1]  # mi.Vector3f
+                n0 = face_normals[0]  # Vector3f
+                nn = face_normals[1]  # Vector3f
 
                 # Compute face 0 tangent direction (3D)
                 to_hat = dr.cross(n0, e_hat)
@@ -870,15 +847,15 @@ def project_to_2d(vertical_edges, calculation_height, vertices):
                     ccw_dx = npx - vpx
                     ccw_dy = npy - vpy
                     ccw_len = math.sqrt(ccw_dx**2 + ccw_dy**2) + EPS
-                    ccw_tangent = mi.Vector2f(ccw_dx / ccw_len, ccw_dy / ccw_len)
+                    ccw_tangent = Vector2f(ccw_dx / ccw_len, ccw_dy / ccw_len)
                 else:
-                    ccw_tangent = mi.Vector2f(1.0, 0.0)
+                    ccw_tangent = Vector2f(1.0, 0.0)
 
                 # Project to XY plane
-                to_hat_2d = mi.Vector2f(to_hat.x, to_hat.y)
+                to_hat_2d = Vector2f(to_hat.x, to_hat.y)
                 to_hat_2d = to_hat_2d / (dr.norm(to_hat_2d) + EPS)
 
-                tn_hat_2d = mi.Vector2f(tn_hat.x, tn_hat.y)
+                tn_hat_2d = Vector2f(tn_hat.x, tn_hat.y)
                 tn_hat_2d = tn_hat_2d / (dr.norm(tn_hat_2d) + EPS)
 
                 # Compute dot products with ccw_tangent
@@ -897,7 +874,7 @@ def project_to_2d(vertical_edges, calculation_height, vertices):
                 face_n_point = vertex_pos + face_n_dir * 0.1
 
                 # Build position (3D)
-                position_3d = mi.Point3f(vertex_pos.x, vertex_pos.y, mi.Float(calculation_height))
+                position_3d = Point3f(vertex_pos.x, vertex_pos.y, Float(calculation_height))
 
                 corner_specific_edge_info = DiffractionPoint(
                     position=position_3d,
@@ -907,19 +884,19 @@ def project_to_2d(vertical_edges, calculation_height, vertices):
                     face_normals_3d=corner_face_normals
                 )
             else:
-                face0_point = vertex_pos + mi.Vector2f(0.1, 0.0)
-                face_n_point = vertex_pos + mi.Vector2f(0.0, 0.1)
+                face0_point = vertex_pos + Vector2f(0.1, 0.0)
+                face_n_point = vertex_pos + Vector2f(0.0, 0.1)
                 corner_specific_edge_info = None
 
         elif len(connected_edges) == 0:
-            face0_point = vertex_pos + mi.Vector2f(0.1, 0.0)
-            face_n_point = vertex_pos + mi.Vector2f(0.0, 0.1)
+            face0_point = vertex_pos + Vector2f(0.1, 0.0)
+            face_n_point = vertex_pos + Vector2f(0.0, 0.1)
             corner_specific_edge_info = None
 
         elif len(connected_edges) == 1:
             edge0 = connected_edges[0]
-            p0_edge = mi.Vector2f(edge0.p0.x, edge0.p0.y)
-            p1_edge = mi.Vector2f(edge0.p1.x, edge0.p1.y)
+            p0_edge = Vector2f(edge0.p0.x, edge0.p0.y)
+            p1_edge = Vector2f(edge0.p1.x, edge0.p1.y)
 
             if _vectors_close(p0_edge, vertex_pos):
                 edge_dir = p1_edge - p0_edge
@@ -932,7 +909,7 @@ def project_to_2d(vertical_edges, calculation_height, vertices):
             # Perpendicular direction
             ed_x = scalar(edge_dir.x)
             ed_y = scalar(edge_dir.y)
-            perp_dir = mi.Vector2f(-ed_y, ed_x)
+            perp_dir = Vector2f(-ed_y, ed_x)
             face_n_point = vertex_pos + perp_dir * 0.1
             corner_specific_edge_info = None
 
@@ -940,15 +917,15 @@ def project_to_2d(vertical_edges, calculation_height, vertices):
             edge0 = connected_edges[0]
             edge1 = connected_edges[1]
 
-            p0_e0 = mi.Vector2f(edge0.p0.x, edge0.p0.y)
-            p1_e0 = mi.Vector2f(edge0.p1.x, edge0.p1.y)
+            p0_e0 = Vector2f(edge0.p0.x, edge0.p0.y)
+            p1_e0 = Vector2f(edge0.p1.x, edge0.p1.y)
             if _vectors_close(p0_e0, vertex_pos):
                 dir0 = p1_e0 - p0_e0
             else:
                 dir0 = p0_e0 - p1_e0
 
-            p0_e1 = mi.Vector2f(edge1.p0.x, edge1.p0.y)
-            p1_e1 = mi.Vector2f(edge1.p1.x, edge1.p1.y)
+            p0_e1 = Vector2f(edge1.p0.x, edge1.p0.y)
+            p1_e1 = Vector2f(edge1.p1.x, edge1.p1.y)
             if _vectors_close(p0_e1, vertex_pos):
                 dir1 = p1_e1 - p0_e1
             else:
