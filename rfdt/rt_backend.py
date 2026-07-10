@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import drjit as dr
 import drjit.cuda.ad as cuda_ad
-import rayd
+import rayd.drjit as rayd
 
 
 # Backend-resolved DrJit type aliases.
@@ -125,7 +125,10 @@ def ray_intersect(scene, origins, directions, active=None):
     if scene is None:
         return _invalid_intersection(origins, directions)
 
-    ray = rayd.Ray(origins, directions)
+    # RFDT differentiates both transmitter rays and dynamic mesh geometry.
+    # RayD selects the autodiff intersection overload from the ray type, so
+    # using Ray here would silently detach hit positions and distances.
+    ray = rayd.RayAD(origins, directions)
     raw = scene.intersect(
         ray,
         active=True if active is None else active,
